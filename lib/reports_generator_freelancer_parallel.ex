@@ -50,11 +50,21 @@ defmodule ReportsGeneratorFreelancerParallel do
     hours_per_month = build_monthly_hours(parsed_file)
     hours_per_year = build_yearly_hours(parsed_file)
 
-    %{
-      "all_hours" => all_hours,
-      "hours_per_month" => hours_per_month,
-      "hours_per_year" => hours_per_year
-    }
+    build_report_map(all_hours, hours_per_month, hours_per_year)
+  end
+
+  def build_from_many(file_names) when not is_list(file_names),
+    do: {:error, "Please provide a list of strings"}
+
+  def build_from_many(file_names) do
+    result =
+      file_names
+      |> Task.async_stream(&build/1)
+      |> Enum.reduce(report_acc_full(), fn {:ok, result}, acc ->
+        sum_reports(result, acc)
+      end)
+
+    {:ok, result}
   end
 
   defp build_all_hours(parsed_file) do
@@ -92,6 +102,10 @@ defmodule ReportsGeneratorFreelancerParallel do
     Enum.into(@developers, %{}, &{&1, months})
   end
 
+  defp report_acc_full() do
+    build_report_map(report_acc_day(), report_acc_month(), report_acc_year())
+  end
+
   defp sum_all_hours([name, hours, _day, _month, _year], acc) do
     %{acc | name => acc[name] + hours}
   end
@@ -102,5 +116,33 @@ defmodule ReportsGeneratorFreelancerParallel do
 
   defp sum_yearly_hours([name, hours, _day, _month, year], acc) do
     %{acc | name => %{acc[name] | year => acc[name][year] + hours}}
+  end
+
+  defp sum_reports(map1, map2) do
+    all_hours =
+      Map.merge(map1["all_hours"], map2["all_hours"], fn _key, value1, value2 ->
+        value1 + value2
+      end)
+
+    hours_per_month = deep_merge(map1["hours_per_month"], map2["hours_per_month"])
+    hours_per_year = deep_merge(map1["hours_per_year"], map2["hours_per_year"])
+
+    build_report_map(all_hours, hours_per_month, hours_per_year)
+  end
+
+  defp deep_merge(map1, map2) do
+    Map.merge(map1, map2, fn _key, value1, value2 ->
+      Map.merge(value1, value2, fn _key, dev1, dev2 ->
+        dev1 + dev2
+      end)
+    end)
+  end
+
+  defp build_report_map(all_hours, hours_per_month, hours_per_year) do
+    %{
+      "all_hours" => all_hours,
+      "hours_per_month" => hours_per_month,
+      "hours_per_year" => hours_per_year
+    }
   end
 end
